@@ -8,6 +8,7 @@ Source of truth for scope and decisions: `docs/PLAN.md`.
 - Demo only with own or Creative Commons / public-domain content.
 - Stay inside MVP scope in `docs/PLAN.md`; anything else goes to "Open questions", not code.
 - Never push, open PRs, publish images, or tag releases without explicit user approval.
+- Never install packages outside the project's `.venv` (no `pip install --user`, no global `pip`/`brew`). If a tool is missing, use what's there or ask. Scratch files go in the session scratchpad, never in the repo.
 
 ## Team workflow
 The main session is the orchestrator. Role agents live in `.claude/agents/`:

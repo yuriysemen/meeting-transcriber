@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly slow-suite run (real 2h-audio scenario, AC-M1-14). Time chosen
+    # arbitrarily; adjust if it collides with other scheduled jobs later.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Fast suite only (pyproject's `addopts = -m 'not slow'` excludes the
+    # slow marker by default). Runs on every push and pull request only —
+    # not on workflow_dispatch/schedule, which are for the `slow` job below.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+
+      - name: ffmpeg -version
+        run: ffmpeg -version
+
+      - name: Install package (dev extras)
+        run: pip install -e ".[dev]"
+
+      - name: Run fast test suite
+        run: pytest -q
+
+  slow:
+    # Real, longer-running scenario (AC-M1-14: 2h audio, `@pytest.mark.slow`).
+    # Manual trigger + weekly schedule only — never on push/pull_request.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+
+      - name: ffmpeg -version
+        run: ffmpeg -version
+
+      - name: Install package (dev extras)
+        run: pip install -e ".[dev]"
+
+      - name: Run slow test suite
+        run: pytest -q -m slow
