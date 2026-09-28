@@ -38,6 +38,13 @@ def extract_audio(
 ) -> Path: ...
 ```
 
+**What a fake runner must do** (clarified 2026-09-28, after implementation started):
+- `args[0]` is the bare command name, `"ffprobe"` or `"ffmpeg"`, resolved through `PATH`.
+- **ffprobe** is called with `-of json -show_streams -show_format`. It succeeds only if the runner returns 0 **and** sends valid JSON through `on_stdout_line`, e.g. `{"streams":[{"codec_type":"audio"}],"format":{"duration":"5.0"}}`. Anything else counts as a failed probe.
+- **ffmpeg:** the **last argument** (`args[-1]`) is the temporary output file. A conversion succeeds only if the runner returns 0 **and** that file exists and is non-empty (Q8: output with 0 audio samples is a failure). A fake that simulates success must write a non-empty file there, e.g. by copying a real WAV fixture or exec'ing the real ffmpeg.
+- **Progress:** ffmpeg is called with `-progress pipe:1 -nostats`. A fake can send lines such as `out_time_us=2500000` and `progress=end` through `on_stdout_line`.
+- `extract_audio` also takes a keyword-only `on_elapsed: Callable[[float], None] | None`. It reports elapsed audio time when the duration is unknown (see "Unknown duration" below).
+
 Errors are raised as subclasses of `meeting_transcriber.audio.ExtractionError`. Each one carries the exit code from Q4 and, when a log was saved, its path. The CLI maps them to the message and exit code; it never shows a traceback.
 
 ## Acceptance criteria
@@ -70,6 +77,7 @@ The CLI form below uses the proposed defaults from Q1–Q4.
 | AC-M1-21 | Valid input; stderr is **not** a terminal (pipe, CI, file) | CLI `--extract-only` | No progress output on stderr, so logs and the "one message" rule for errors stay clean | Normal `subprocess` capture, same as other CLI tests |
 | AC-M1-22 | Any valid input | extract | Every ffmpeg conversion attempt (normal and retry) includes `-rf64 auto`, so output over 4 GB (~37 h) does not break. Small outputs still pass the WAV format check | Unit: inspect args passed to fake runner. Integration: AC-M1-01 output still passes format check |
 | AC-M1-23 | Conversion fails because the disk is full (runner mocked: exits nonzero, stderr contains `No space left on device`) | extract | Clear error with exit code 4; stderr matches `/disk|space/i`; **no** tolerant retry is attempted; no WAV (or temp file) left behind; log saved if its directory is still writable, and the error is still shown if it is not | Unit with mocked runner; check call count = 1 |
+| AC-M1-24 | `meeting_transcriber.audio.extract_audio` raises an unexpected exception (e.g. `RuntimeError("boom")`) | CLI `--extract-only` on a valid input | Exit 1; stderr has one line matching `/^Error: unexpected error: RuntimeError: boom/` that names the input file, plus a hint mentioning `MEETING_TRANSCRIBER_DEBUG`; no `Traceback` in stderr; no WAV or temp file left. With `MEETING_TRANSCRIBER_DEBUG=1`: exit 1 and stderr contains `Traceback` (Q13) | Subprocess running a tiny script that patches `meeting_transcriber.audio.extract_audio` **before** importing the CLI, then runs `runpy.run_module("meeting_transcriber", run_name="__main__")` |
 
 ## Edge cases & error handling
 - **ffprobe cannot read the container** (truncated, zero-byte, not media). ffprobe fails before audio selection is possible. The proposed behavior is in Q5. Either way, the result must be the "clear error + log" path, never a traceback.
@@ -107,3 +115,7 @@ All proposed defaults below were accepted by the user on 2026-09-28.
 | Q8 | Should the retry trigger on nonzero exit only, or also when the output is empty or much shorter than the probed duration? | Nonzero exit, or output with 0 audio samples. There is no duration-ratio heuristic in M1. |
 | Q9 | PLAN.md requires 3–5 real failing files and their `ffprobe` output in `docs/troubleshooting-ffmpeg.md` before implementation. None exist. Do we block on this? | Don't block. The synthetic broken files stand in for them. The tech-writer creates `docs/troubleshooting-ffmpeg.md` with the `ffprobe` output of the synthetic broken fixtures, and real cases are appended later without committing the media. |
 | Q10 | Should extraction also be exposed as a public Python API (e.g. `extract_audio(src, dst) -> Path`) for tests and M2? | Yes. Put it in `meeting_transcriber.audio` and have the CLI call it. Tests may target either one. |
+| Q11 | What if the default output path is the input itself (`transcribe x.wav --extract-only` without `-o`)? | Refuse with exit 2 instead of overwriting the source. *(Added during implementation.)* |
+| Q12 | What if the output directory is missing or cannot be written? | A missing directory is created. An unwritable one gives exit 4; full disk / quota gives the disk-full error (AC-M1-23). *(Added during implementation.)* |
+| Q13 | Ctrl-C and unexpected errors? | Ctrl-C: exit 130, one-line message, temp files cleaned up. Unexpected errors: exit 1 with a one-line message; the full traceback only with `MEETING_TRANSCRIBER_DEBUG=1`. *(Added during implementation.)* |
+| Q14 | Is a log saved when the file has no audio stream (AC-M1-06)? | No. This is a clean detection, not a failed ffmpeg/ffprobe run. The number of audio tracks goes to the log on failure and to `logging.info`, never to the terminal on success. *(Added during implementation.)* |
